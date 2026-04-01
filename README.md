@@ -4,11 +4,12 @@
 
 - **React 19** + **TypeScript** + **Vite**
 - **Tailwind CSS 4** con tema personalizado (CSS variables)
-- **React Router DOM** — rutas públicas y privadas
-- **React Query** — manejo de estado de las peticiones
+- **React Router DOM** — rutas públicas y privadas con protección por sesión
+- **React Query** — manejo de estado de las peticiones (`QueryClient` centralizado en `lib/query-client.ts`)
 - **React Hook Form** + **Zod** — formularios con validación
 - **Axios** — cliente HTTP con interceptores
-- **Zustand** — estado global (disponible, no implementado)
+- **Zustand** — estado global de autenticación (`token`, usuario, login/logout)
+- **js-cookie** — persistencia del token en cookie `access_token` (7 días)
 - **React Hot Toast** — notificaciones
 - **React Icons** — iconografía
 
@@ -45,6 +46,17 @@ Documentación completa: [dummyjson.com/docs](https://dummyjson.com/docs)
 | `npm run lint:fix` | Ejecutar ESLint con autofix |
 | `npm run format`   | Formatear con Prettier      |
 
+## Autenticación y rutas
+
+- **`stores/auth-store.ts` (Zustand)** — `token`, `user`, `setSession`, `setUser`, `logout`. El token se guarda en cookie y se sincroniza con React Query al cerrar sesión (`queryClient.clear()`).
+- **`components/auth/auth-route-guard.tsx`** — envuelve layouts según `variant`:
+  - **`protected`**: solo usuarios con sesión (si no hay token → redirección a `/auth` con `state.from` para volver tras el login).
+  - **`guest`**: solo sin sesión (si hay token en `/auth` → redirección al destino previo o `/dashboard`).
+- **`utils/auth-navigation.ts`** — `getPostAuthRedirectPath` para reconstruir la URL de destino tras login.
+- **`lib/api-client.ts`** — interceptor de petición con Bearer; en **401** ejecuta logout del store y redirección a `/auth`.
+
+Las rutas definidas en `private.routes.tsx` van dentro de `AuthRouteGuard` con `variant="protected"`. Las de login bajo `/auth` usan `variant="guest"`.
+
 ## Estructura del proyecto
 
 ```
@@ -53,17 +65,18 @@ src/
 │   ├── ui/           # Componentes base sin lógica (Button, Card, Input, Label)
 │   ├── shared/       # Componentes reutilizables con lógica (Form, FormInput)
 │   ├── layouts/      # Layouts de la app (AuthLayout, PrivateLayout)
-│   └── {entidad}/    # Componentes específicos de una vista (auth/)
-├── pages/            # Páginas/vistas — solo composición, sin lógica propia
-│   ├── auth/         # login-page.tsx
+│   └── auth/         # auth-form, auth-route-guard
+├── pages/            # Páginas/vistas — solo composición donde aplica
+│   ├── auth/         # login-page, reset-password-page
 │   ├── dashboard/    # dashboard-page.tsx
 │   └── not-found-page.tsx
 ├── routes/           # Definición de rutas (app-routes, public.routes, private.routes)
 ├── services/         # Hooks de React Query + llamadas API por entidad
+├── stores/           # Estado global Zustand (auth-store)
 ├── types/            # Tipos TypeScript por entidad (auth.type.ts)
-├── lib/              # Configuración de librerías (axios, utils)
+├── lib/              # query-client (React Query), api-client (axios), utils
 ├── providers/        # Providers de la app (QueryProvider, AppProvider)
-├── utils/            # Utilidades puras (formateo de fechas)
+├── utils/            # Utilidades (auth-navigation, formateo)
 ├── styles/           # Estilos globales (main.css, theme.css)
 ```
 
@@ -72,8 +85,8 @@ src/
 Las rutas se organizan en 3 archivos:
 
 - `app-routes.tsx` — archivo principal que compone todas las rutas
-- `public.routes.tsx` — rutas públicas (auth, login, reset-password)
-- `private.routes.tsx` — rutas privadas (dashboard)
+- `public.routes.tsx` — rutas bajo `/auth` (login, recuperación de contraseña) con guard `guest`
+- `private.routes.tsx` — rutas privadas (p. ej. dashboard) con guard `protected`
 
 ## Convenciones de código
 
@@ -136,18 +149,23 @@ Las rutas se organizan en 3 archivos:
 
 ### Dónde va cada cosa
 
-| Qué                      | Dónde                       |
-| ------------------------ | --------------------------- |
-| Botón, Card, Input base  | `components/ui/`            |
-| Form con react-hook-form | `components/shared/`        |
-| Formulario de login      | `components/auth/`          |
-| Página de login (vista)  | `pages/auth/login-page.tsx` |
-| Hook `useLogin`          | `services/auth.service.ts`  |
-| Tipo `LoginRequest`      | `types/auth.type.ts`        |
-| Rutas públicas           | `routes/public.routes.tsx`  |
-| Rutas privadas           | `routes/private.routes.tsx` |
-| `cn()`, `formatDate()`   | `lib/utils.ts`, `utils/`    |
-| Axios config             | `lib/api-client.ts`         |
+| Qué                              | Dónde                                      |
+| -------------------------------- | ------------------------------------------ |
+| Botón, Card, Input base          | `components/ui/`                           |
+| Form con react-hook-form         | `components/shared/`                       |
+| Formulario de login              | `components/auth/auth-form.tsx`            |
+| Protección de rutas              | `components/auth/auth-route-guard.tsx`     |
+| Página de login (vista)          | `pages/auth/login-page.tsx`                |
+| Vista recuperar contraseña (UI)  | `pages/auth/reset-password-page.tsx`       |
+| Hook `useLogin` / `useGetMe`     | `services/auth.service.ts`                 |
+| Tipo `LoginRequest`              | `types/auth.type.ts`                       |
+| Store sesión (Zustand)           | `stores/auth-store.ts`                     |
+| Rutas públicas                   | `routes/public.routes.tsx`                 |
+| Rutas privadas                   | `routes/private.routes.tsx`                |
+| Redirección post-login           | `utils/auth-navigation.ts`                 |
+| `cn()`, `formatDate()`           | `lib/utils.ts`, `utils/`                   |
+| Instancia React Query compartida | `lib/query-client.ts`                    |
+| Axios config                     | `lib/api-client.ts`                        |
 
 ### Crear un nuevo módulo (ejemplo: `users`)
 
@@ -155,7 +173,7 @@ Las rutas se organizan en 3 archivos:
 2. `services/user.service.ts` — hooks de React Query
 3. `components/user/` — componentes específicos
 4. `pages/user/` — páginas (solo composición)
-5. Agregar rutas en `routes/public.routes.tsx` o `routes/private.routes.tsx`
+5. Agregar rutas en `routes/public.routes.tsx` o `routes/private.routes.tsx` (si es privada, envolver con `AuthRouteGuard` o añadir hijos bajo una ruta ya protegida)
 
 ### Servicios (React Query)
 
@@ -190,12 +208,12 @@ export { userKeys, useGetUsers }
 
 ## Rutas
 
-| Ruta                   | Tipo    | Página    |
-| ---------------------- | ------- | --------- |
-| `/auth`                | Pública | Login     |
-| `/auth/reset-password` | Pública | 404       |
-| `/dashboard`           | Pública | Dashboard |
-| `*`                    | —       | 404       |
+| Ruta                     | Acceso        | Página / descripción        |
+| ------------------------ | ------------- | ----------------------------- |
+| `/auth`                  | Solo invitado | Login                         |
+| `/auth/reset-password`   | Solo invitado | Recuperar contraseña (vista)  |
+| `/dashboard`             | Solo sesión   | Dashboard                     |
+| `*`                      | —             | 404                           |
 
 ## Variables de entorno
 
@@ -206,4 +224,3 @@ cp .env.example .env
 ```
 
 La API apunta a **[DummyJSON](https://dummyjson.com)**, un servicio gratuito de pruebas REST que no requiere registro.
-# auth-flow-zustand
